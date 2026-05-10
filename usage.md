@@ -158,7 +158,9 @@ python preprocess_image_pairs.py \
   --patch-size 256 \
   --test-ratio 0.2 \
   --white-threshold 245 \
-  --min-tissue 0.05
+  --min-tissue 0.05 \
+  --local-registration translation \
+  --local-max-shift 32
 ```
 
 这个脚本会完成：
@@ -166,10 +168,23 @@ python preprocess_image_pairs.py \
 ```text
 匹配 HE/IHC 整图
 将 HE 刚性配准到 IHC
+在每个 256 patch 上做局部平移微调
 切成 256 x 256 patch
 去除大面积白背景 patch
 划分 train/test
 保存成成对 PNG 文件
+```
+
+如果局部仍有明显旋转偏差，可以尝试：
+
+```bash
+--local-registration rigid
+```
+
+如果局部配准反而引入错误，可以关闭 patch 级微调：
+
+```bash
+--local-registration none
 ```
 
 ## 5. 开始训练
@@ -191,8 +206,8 @@ python train_stage2_seperate_train_by_iters.py
 
 ```bash
 python train_stage2_seperate_train_by_iters.py \
-  --data-root /root/siton-tmp/lzj/Virtual-histological-staining-of-unlabeled-autopsy-tissue/dataset/DermaRepo_processed_256 \
-  --model-path /root/siton-tmp/lzj/runs/dermarepo_he_to_ihc \
+  --data-root dataset/DermaRepo_processed_256 \
+  --model-path runs/DermaRepo_processed_256 \
   --gpu 0 \
   --batch-size 4 \
   --n-epoch 150 \
@@ -319,6 +334,48 @@ model_G_latest.h5
 model_D_latest.h5
 model_R_latest.h5
 ```
+### 大致流程
+
+epoch 0:
+  训练 G/D 6000 step
+    每 100 step 验证一次
+    每 100 step 保存 latest 权重
+    如果验证变好，额外保存 best 权重
+
+  训练 R 6000 step
+    中间不按 valid_steps 验证
+
+  这一轮结束后，再验证一次
+  保存 latest 权重
+
+
+epoch 0:
+  G/D 训练 1000 step
+    step 200: 验证 + 保存 latest
+    step 400: 验证 + 保存 latest
+    step 600: 验证 + 保存 latest
+    step 800: 验证 + 保存 latest
+  R 训练 1000 step
+  epoch 结束: 验证 + 保存 latest
+
+epoch 1:
+  G/D 训练 900 step
+    step 200: 验证 + 保存 latest
+    step 400: 验证 + 保存 latest
+    step 600: 验证 + 保存 latest
+    step 800: 验证 + 保存 latest
+  R 训练 900 step
+  epoch 结束: 验证 + 保存 latest
+
+epoch 2:
+  G/D 训练 810 step
+    step 200: 验证 + 保存 latest
+    step 400: 验证 + 保存 latest
+    step 600: 验证 + 保存 latest
+    step 800: 验证 + 保存 latest
+  R 训练 810 step
+  epoch 结束: 验证 + 保存 latest
+
 
 ## 7. 输出文件
 
