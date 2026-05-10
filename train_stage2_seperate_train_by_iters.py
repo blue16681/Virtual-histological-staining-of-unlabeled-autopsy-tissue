@@ -1,11 +1,62 @@
 import os
+import argparse
+from pathlib import Path
+
+
+def parse_args():
+    repo_root = Path(__file__).resolve().parent
+    default_data_root = repo_root / 'dataset' / 'DermaRepo_processed_256'
+    default_model_path = repo_root / 'runs' / 'dermarepo_he_to_ihc'
+
+    parser = argparse.ArgumentParser(description='Train RegiStain for paired image translation.')
+    parser.add_argument('--data-root', default=str(default_data_root),
+                        help='Dataset root containing train/input, train/target, test/input, and test/target.')
+    parser.add_argument('--model-path', default=str(default_model_path),
+                        help='Directory for checkpoints, logs, and preview outputs.')
+    parser.add_argument('--gpu', default='0', help='CUDA_VISIBLE_DEVICES value. Use "" or "-1" for CPU.')
+    parser.add_argument('--batch-size', type=int, default=4)
+    parser.add_argument('--valid-batch-size', type=int, default=None)
+    parser.add_argument('--image-size', type=int, default=256)
+    parser.add_argument('--input-channels', type=int, default=3)
+    parser.add_argument('--label-channels', type=int, default=3)
+    parser.add_argument('--n-channels', type=int, default=32,
+                        help='Base channel count for G/D. Lower it if GPU memory is limited.')
+    parser.add_argument('--lambda-adv', type=float, default=50.0,
+                        help='Adversarial loss weight.')
+    parser.add_argument('--initial-alternate-steps', type=int, default=6000,
+                        help='G/D steps and R steps per alternating round.')
+    parser.add_argument('--valid-steps', type=int, default=100)
+    parser.add_argument('--n-epoch', type=int, default=150,
+                        help='Number of alternating training rounds.')
+    parser.add_argument('--train-q-limit', type=int, default=100)
+    parser.add_argument('--valid-q-limit', type=int, default=300)
+    parser.add_argument('--n-threads', type=int, default=2)
+    parser.add_argument('--train-repeat', type=int, default=500,
+                        help='How many times to repeat the train file list in the tf.data stream.')
+    parser.add_argument('--valid-repeat', type=int, default=5000,
+                        help='How many times to repeat the validation file list in the tf.data stream.')
+    parser.add_argument('--epoch-begin', type=int, default=0,
+                        help='Starting training round index. Use 0 for training from scratch.')
+    parser.add_argument('--iter-begin', type=int, default=None)
+    parser.add_argument('--prev-checkpoint-path', default=None)
+    parser.add_argument('--g-warmstart-checkpoint', default=None)
+    parser.add_argument('--d-warmstart-checkpoint', default=None)
+    parser.add_argument('--r-warmstart-checkpoint', default=None)
+    parser.add_argument('--dvf-thresholding-distance', type=int, default=30)
+    parser.add_argument('--gauss-kernal-size', type=int, default=80)
+    parser.add_argument('--smoke-test', action='store_true',
+                        help='Use tiny loop counts to check the pipeline quickly.')
+    return parser.parse_args()
+
+
+ARGS = parse_args()
+
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"] = ARGS.gpu
 
 import numpy as np
 
 import batch_utils
-
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 import glob, random, logging
 
@@ -25,22 +76,25 @@ import time
 def init_parameters():
     tc, vc = ConfigObj(), ConfigObj()
 
-    tc.model_path = 'D:/project/Autopsy-Virtual-Staining-main/runs/dermarepo_he_to_ihc/' # set the path to save model
-    tc.prev_checkpoint_path = None
+    data_root = Path(ARGS.data_root).expanduser().resolve()
+    model_path = Path(ARGS.model_path).expanduser().resolve()
+
+    tc.model_path = str(model_path) + os.sep # set the path to save model
+    tc.prev_checkpoint_path = ARGS.prev_checkpoint_path
     tc.save_every_epoch = True
 
     # pretrained checkpoints to start from
-    tc.G_warmstart_checkpoint = None
-    tc.D_warmstart_checkpoint = None
-    tc.R_warmstart_checkpoint = None
+    tc.G_warmstart_checkpoint = ARGS.g_warmstart_checkpoint
+    tc.D_warmstart_checkpoint = ARGS.d_warmstart_checkpoint
+    tc.R_warmstart_checkpoint = ARGS.r_warmstart_checkpoint
     assert not (tc.prev_checkpoint_path
                 and (tc.G_warmstart_checkpoint or tc.D_warmstart_checkpoint or tc.R_warmstart_checkpoint))
 
-    tc.image_path = 'D:/project/Autopsy-Virtual-Staining-main/dataset/DermaRepo_processed_he_to_ihc/train/target/*.png' # path for training data
-    vc.image_path = 'D:/project/Autopsy-Virtual-Staining-main/dataset/DermaRepo_processed_he_to_ihc/test/target/*.png' # path for validation data
+    tc.image_path = str(data_root / 'train' / 'target' / '*.png') # path for training data
+    vc.image_path = str(data_root / 'test' / 'target' / '*.png') # path for validation data
 
     def convert_inp_path_from_target(inp_path: str):
-        return inp_path.replace('target', 'input')
+        return inp_path.replace('/target/', '/input/').replace('\\target\\', '\\input\\')
 
     tc.convert_inp_path_from_target = convert_inp_path_from_target
     vc.convert_inp_path_from_target = convert_inp_path_from_target
@@ -49,36 +103,42 @@ def init_parameters():
     tc.is_mat, vc.is_mat = False, False  # kept for legacy loaders
     tc.data_inpnorm, vc.data_inpnorm = 'norm_by_mean_std', 'norm_by_mean_std'
     tc.channel_start_index, vc.channel_start_index = 0, 0
-    tc.channel_end_index, vc.channel_end_index = 3, 3  # exclusive
+    tc.channel_end_index, vc.channel_end_index = ARGS.input_channels, ARGS.input_channels  # exclusive
 
     # network and loss params
     tc.is_training, vc.is_training = True, False
-    tc.image_size, vc.image_size = 256, 256
-    tc.num_slices, vc.num_slices = 3, 3
-    tc.label_channels, vc.label_channels = 3, 3
+    tc.image_size, vc.image_size = ARGS.image_size, ARGS.image_size
+    tc.num_slices, vc.num_slices = ARGS.input_channels, ARGS.input_channels
+    tc.label_channels, vc.label_channels = ARGS.label_channels, ARGS.label_channels
     assert tc.channel_end_index - tc.channel_start_index == tc.num_slices
     assert vc.channel_end_index - vc.channel_start_index == vc.num_slices
-    tc.n_channels, vc.n_channels = 32, 32
-    tc.lamda = 50.0  # adv loss
+    tc.n_channels, vc.n_channels = ARGS.n_channels, ARGS.n_channels
+    tc.lamda = ARGS.lambda_adv  # adv loss
 
     tc.nf_enc, vc.nf_enc = [8, 16, 16, 32, 32], [8, 16, 16, 32, 32]  # for aligner
     tc.nf_dec, vc.nf_dec = [32, 32, 32, 32, 32, 16, 16], [32, 32, 32, 32, 32, 16, 16]  # for aligner
     tc.R_loss_type = 'ncc'
     tc.lambda_r_tv = 1.0  # .1    # tv of predicted flow
-    tc.gauss_kernal_size = 80
+    tc.gauss_kernal_size = ARGS.gauss_kernal_size
     tc.dvf_clipping = True  # clip DVF to [mu-sigma*dvf_clipping_nsigma, mu+sigma*dvf_clipping_nsigma]
     tc.dvf_clipping_nsigma = 3
     tc.dvf_thresholding = True  # clip DVF to [-dvf_thresholding_distance, dvf_thresholding_distance]
-    tc.dvf_thresholding_distance = 30
+    tc.dvf_thresholding_distance = ARGS.dvf_thresholding_distance
 
     # training params
-    tc.batch_size, vc.batch_size = 4, 4
-    tc.n_shuffle_epoch, vc.n_shuffle_epoch = 500, 5000  # for the batchloader
-    tc.initial_alternate_steps = 6000  # train G/D for initial_alternate_steps steps before switching to R for the same # of steps
-    tc.valid_steps = 100  # perform validation when D_steps % valid_steps == 0 or at the end of a loop of (train G/D, train R)
-    tc.n_threads, vc.n_threads = 2, 2
-    tc.q_limit, vc.q_limit = 100, 300
-    tc.N_epoch = 150  # number of loops
+    valid_batch_size = ARGS.valid_batch_size or ARGS.batch_size
+    tc.batch_size, vc.batch_size = ARGS.batch_size, valid_batch_size
+    tc.n_shuffle_epoch, vc.n_shuffle_epoch = ARGS.train_repeat, ARGS.valid_repeat  # for the batchloader
+    tc.initial_alternate_steps = ARGS.initial_alternate_steps  # train G/D before switching to R for the same # of steps
+    tc.valid_steps = ARGS.valid_steps  # perform validation when D_steps % valid_steps == 0
+    tc.n_threads, vc.n_threads = ARGS.n_threads, ARGS.n_threads
+    tc.q_limit, vc.q_limit = ARGS.train_q_limit, ARGS.valid_q_limit
+    tc.N_epoch = ARGS.n_epoch  # number of loops
+    if ARGS.smoke_test:
+        tc.initial_alternate_steps = 10
+        tc.valid_steps = 5
+        tc.q_limit, vc.q_limit = 5, 5
+        tc.N_epoch = 1
 
     tc.tol = 0  # current early stopping patience
     tc.max_tol = 2  # the max-allowed early stopping patience
@@ -104,10 +164,10 @@ def init_parameters():
     tc.loss_mask, vc.loss_mask = False, False  # True, False
 
     # training resume parameters
-    tc.epoch_begin = 79
+    tc.epoch_begin = ARGS.epoch_begin
     # this overrides tc.epoch_  begin the training schedule; tc.epoch_begin is required for logging
     # set it to None when not used
-    tc.iter_begin =  None
+    tc.iter_begin = ARGS.iter_begin
 
     return tc, vc
 
