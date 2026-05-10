@@ -1,0 +1,52 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+.venvs/
+venv/
+env/
+
+# Local data and generated artifacts
+dataset/
+runs/
+output/
+logs/
+checkpoints/
+
+# Model weights and training snapshots
+*.h5
+*.ckpt
+*.pb
+*.onnx
+*.npy
+*.npz
+*.mat
+
+# Large image artifacts
+*.tif
+*.tiff
+*.svs
+*.ndpi
+*.mrxs
+
+# Archives and downloads
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+
+# Editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Conda local files
+condaenv.*.requirements.txt
